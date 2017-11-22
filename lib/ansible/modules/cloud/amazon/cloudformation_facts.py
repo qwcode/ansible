@@ -32,27 +32,38 @@ options:
         description:
             - Get all stack information for the stack
         required: false
-        default: false
+        default: "false"
+        choices: [ "true", "false" ]
     stack_events:
         description:
             - Get stack events for the stack
         required: false
-        default: false
+        default: "false"
+        choices: [ "true", "false" ]
     stack_template:
         description:
             - Get stack template body for the stack
         required: false
-        default: false
+        default: "false"
+        choices: [ "true", "false" ]
     stack_resources:
         description:
             - Get stack resources for the stack
         required: false
-        default: false
+        default: "false"
+        choices: [ "true", "false" ]
     stack_policy:
         description:
             - Get stack policy for the stack
         required: false
-        default: false
+        default: "false"
+        choices: [ "true", "false" ]
+    stack_change_sets:
+        description:
+            - Get stack change sets
+        required: false
+        default: "false"
+        choices: [ "true", "false" ]
 extends_documentation_fragment:
     - aws
     - ec2
@@ -153,6 +164,10 @@ stack_resources:
                  resource 'PhysicalResourceId' parameter
     returned: only if all_facts or stack_resourses is true and the stack exists
     type: dict
+stack_change_sets:
+    description: Describes the stack change sets
+    returned: only if all_facts or stack_change_sets is true and the stack exists
+    type: list
 '''
 
 import json
@@ -239,7 +254,18 @@ class CloudFormationServiceManager:
         except Exception as e:
             self.module.fail_json(msg="Error getting stack template - " + str(e), exception=traceback.format_exc())
 
-    def paginated_response(self, func, result_key, next_token=None):
+    def stack_change_sets(self, stack_name):
+        try:
+            func = partial(self.client.list_change_sets, StackName=stack_name)
+            result = []
+            for s in self.paginated_response(func, 'Summaries'):
+                func = partial(self.client.describe_change_set, StackName=stack_name, ChangeSetName=s['ChangeSetName'])
+                result.append(self.paginated_response(func))
+            return result
+        except Exception as e:
+            self.module.fail_json(msg="Error describing change sets - " + str(e), exception=traceback.format_exc())
+
+    def paginated_response(self, func, result_key=None, next_token=None):
         '''
         Returns expanded response for paginated operations.
         The 'result_key' is used to define the concatenated results that are combined from each paginated response.
@@ -247,8 +273,9 @@ class CloudFormationServiceManager:
         args = dict()
         if next_token:
             args['NextToken'] = next_token
-        response = func(**args)
-        result = response.get(result_key)
+        result = response = func(**args)
+        if result_key:
+            result = response.get(result_key)
         next_token = response.get('NextToken')
         if not next_token:
             return result
@@ -272,6 +299,7 @@ def main():
         stack_events=dict(required=False, default=False, type='bool'),
         stack_resources=dict(required=False, default=False, type='bool'),
         stack_template=dict(required=False, default=False, type='bool'),
+        stack_change_sets=dict(required=False, default=False, type='bool'),
     ))
 
     module = AnsibleModule(argument_spec=argument_spec, supports_check_mode=False)
@@ -307,7 +335,8 @@ def main():
             facts['stack_policy'] = service_mgr.get_stack_policy(stack_name)
         if all_facts or module.params.get('stack_events'):
             facts['stack_events'] = service_mgr.describe_stack_events(stack_name)
-
+        if all_facts or module.params.get('stack_change_sets'):
+            facts['stack_change_sets'] = service_mgr.stack_change_sets(stack_name)
         result['ansible_facts']['cloudformation'][stack_name] = facts
 
     result['changed'] = False
